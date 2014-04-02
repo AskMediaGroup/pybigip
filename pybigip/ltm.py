@@ -6,11 +6,33 @@
 from itertools import chain, izip
 from pybigip import core
 
+class VirtualAddress(object):
+    '''
+    '''
+    _ip = None
+
+    def __init__(self, con, name):
+        ''' '''
+        self._con = con
+        self._lcon = con.LocalLB.VirtualAddressV2
+        self.name = name
+
+    @property
+    def ip(self):
+        '''
+        '''
+        if self._ip is None:
+            self._ip = self._lcon.get_address([self.name])[0]
+
+        return self._ip
+
 
 class VirtualServer(object):
     '''
     '''
     _pool = None
+    _address = None
+    _destination = None
 
     def __init__(self, con, name):
         '''
@@ -20,12 +42,37 @@ class VirtualServer(object):
         self.name = name
 
     @property
+    def destination(self):
+        '''
+        '''
+        if self._destination is None:
+            self._destination = self._lcon.get_destination_v2([self.name])[0]
+
+        return self._destination
+
+
+    @property
+    def address(self):
+        '''
+        '''
+        if not self._address:
+            self._address = VirtualAddress(self._con, self.destination['address'])
+
+        return self._address
+
+    @property
+    def port(self):
+        '''
+        '''
+        return self.destination['port']
+
+    @property
     def pool(self):
         '''
         '''
         if not self._pool:
             name = self._lcon.get_default_pool_name([self.name])[0]
-            self._pool = Pool(self._con, name.split('/')[-1])
+            self._pool = Pool(self._con, name)
 
         return self._pool
 
