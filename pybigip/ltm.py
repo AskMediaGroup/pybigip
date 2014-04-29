@@ -388,3 +388,19 @@ class Member(object):
         self._lcon.set_member_priority([self.pool.name],
                                        [[self.to_dict()]],
                                        [[value]])
+
+    @property
+    def enabled(self):
+        '''
+        Get enabled state for this pool.
+        '''
+        return self.status()['enabled_status'] == 'ENABLED_STATUS_ENABLED'
+
+    @property
+    def available(self):
+        '''
+        Get availability state for this pool.
+
+        @return: bool
+        '''
+        return self.status()['availability_status'] == 'AVAILABILITY_STATUS_GREEN'
