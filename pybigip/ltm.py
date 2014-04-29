@@ -368,7 +368,7 @@ class Member(object):
         '''
         '''
         if not self._status or reload:
-            self._status = self._lcon.get_member_monitor_status(
+            self._status = self._lcon.get_member_object_status(
                     [self.pool.name], [[self.to_dict()]])[0][0]
 
         return self._status
