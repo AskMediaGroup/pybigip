@@ -334,6 +334,24 @@ class Pool(object):
         '''
         return self.status()['availability_status'] == 'AVAILABILITY_STATUS_GREEN'
 
+    def load_all_member_status(self, reload=False):
+        '''
+        Load member status information for all members of this pool in one
+        call to the LTM.
+        '''
+        load = list()
+
+        for i, member in enumerate(self.members):
+            if reload or not member._status:
+                load.append({'member': member.to_dict(),
+                             'index': i})
+
+        stats = self._lcon.get_member_object_status([self.name,],
+            [[x['member'] for x in load]])
+
+        for i, status in enumerate(stats[0]):
+            self.members[load[i]['index']]._status = status
+
 
 class Member(object):
     '''
