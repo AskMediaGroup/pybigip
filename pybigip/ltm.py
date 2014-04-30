@@ -352,12 +352,31 @@ class Pool(object):
         for i, status in enumerate(stats[0]):
             self.members[load[i]['index']]._status = status
 
+    def load_all_member_ips(self, reload=False):
+        '''
+        Load member ip information for all members of this pool in one
+        call to the LTM.
+        '''
+        load = list()
+
+        for i, member in enumerate(self.members):
+            if reload or not member._ip:
+                load.append({'member': member.to_dict(),
+                             'index': i})
+
+        ips = self._lcon.get_member_address([self.name,],
+            [[x['member'] for x in load]])
+
+        for i, ip in enumerate(ips[0]):
+            self.members[load[i]['index']]._ip = ip
+    
 
 class Member(object):
     '''
     Pool member representation
     '''
     _status = None
+    _ip = None
 
     def __init__(self, con, address, port, pool=None):
         ''' '''
@@ -390,6 +409,16 @@ class Member(object):
                     [self.pool.name], [[self.to_dict()]])[0][0]
 
         return self._status
+
+    @property
+    def ip(self):
+        '''
+        '''
+        if not self._ip:
+            self._ip = self._lcon.get_member_address(
+                    [self.pool.name], [[self.to_dict()]])[0][0]
+
+        return self._ip
 
     @property
     def priority(self):
