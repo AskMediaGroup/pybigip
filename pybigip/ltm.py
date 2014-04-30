@@ -199,7 +199,7 @@ class Pools(object):
         @param names: Pool names
         @return: list of Pool object
         '''
-        pools = self._con.get_member(names)
+        pools = self._con.get_member_v2(names)
         return [Pool(self._con, n, p) for n, p in izip(names, pools)]
 
     @property
@@ -252,7 +252,7 @@ class Pool(object):
         @return list of pool member dicts.
         '''
         if not self._members:
-            members = self._lcon.get_member([self.name])[0]
+            members = self._lcon.get_member_v2([self.name])[0]
             self._members = [Member(self._con, pool=self, **m) for m in members]
 
         return self._members
