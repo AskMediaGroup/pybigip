@@ -155,7 +155,7 @@ class Pools(object):
         @param name: Pool name
         @return: Pool object
         '''
-        self.get_multi([name], reload)
+        return self.get_multi([name], reload)
 
     def get_all(self, reload=False):
         '''
@@ -451,3 +451,70 @@ class Member(object):
         @return: bool
         '''
         return self.status()['availability_status'] == 'AVAILABILITY_STATUS_GREEN'
+
+
+class Nodes(object):
+    '''
+    Node address representation
+    '''
+    _names = None
+
+    def __init__(self, con):
+        ''' '''
+        self._con = con
+        self._lcon = self._con.LocalLB.NodeAddressV2
+        self._nodes = dict()
+
+    @property
+    def names(self):
+        ''' '''
+        if not self._names:
+            self._names = self._lcon.get_list()
+
+        return self._names
+
+    def get(self, name, reload=False):
+        ''' '''
+        return self.get_multi([name,], reload)
+
+    def get_all(self, reload=False):
+        ''' '''
+        return self.get_multi(self.names, reload)
+
+    def get_multi(self, names, reload=False):
+        ''' '''
+        missing = list()
+        nodes = list()
+
+        if reload:
+            missing = names
+        else:
+            for name in names:
+                try:
+                    nodes.append(self._nodes[name])
+                except KeyError:
+                    missing.append(name)
+
+        if missing:
+            temp = self.load(missing)
+            nodes += temp
+            self._nodes = dict(((n.name, n) for n in temp))
+
+        return nodes
+
+    def load(self, names):
+        '''
+        '''
+        nodes = self._lcon.get_address(names)
+        return [Node(self._con, n, a) for n, a in izip(names, nodes)]
+
+
+class Node(object):
+    '''
+    '''
+    def __init__(self, con, name, address):
+        '''
+        '''
+        self._con = con
+        self.name = name
+        self.address = address
