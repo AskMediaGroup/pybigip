@@ -2,7 +2,7 @@ from distutils.core import setup
 
 setup(
     name='pybigip',
-    version='0.5.0',
+    version='0.6.0',
     description='Library for managing F5 bigips',
     author='Richard Marshall',
     author_email='richard.marshall@ask.com',

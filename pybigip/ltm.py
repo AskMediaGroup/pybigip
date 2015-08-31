@@ -2,14 +2,21 @@
 
 '''
 
-
+from copy import copy
 from itertools import chain, izip
 from pybigip import core
+
 
 class VirtualAddress(object):
     '''
     '''
     _ip = None
+
+    def __getstate__(self):
+        state = copy(self.__dict__)
+        state['_con'] = None
+        state['_lcon'] = None
+        return state
 
     def __init__(self, con, name):
         ''' '''
@@ -33,6 +40,12 @@ class VirtualServer(object):
     _pool = None
     _address = None
     _destination = None
+
+    def __getstate__(self):
+        state = copy(self.__dict__)
+        state['_con'] = None
+        state['_lcon'] = None
+        return state
 
     def __init__(self, con, name):
         '''
@@ -83,25 +96,40 @@ class VirtualServer(object):
         self._pool = new
         self._lcon.set_default_pool_name([self.name], [new.name])
 
-
+@core.memoize
 class VirtualServers(core.ObjectList):
     '''
     Class for managing the VIPs on the bigip.
     '''
     klass = VirtualServer
 
-    def __init__(self, con):
-        ''' '''
-        super(VirtualServers, self).__init__(con)
-        self._lcon = con.LocalLB.VirtualServer
+    def __getstate__(self):
+        state = copy(self.__dict__)
+        state['_con'] = None
+        state['_lcon'] = None
+        return state
+
+    @property
+    def _lcon(self):
+        return self._con.LocalLB.VirtualServer
+
+    def to_list(self):
+        return [v.to_dict() for v in self._objects]
 
 
+@core.memoize
 class Pools(object):
     '''
     Class for managing the pools on the bigip.
     '''
     _names = None
     _all = False
+
+    def __getstate__(self):
+        state = copy(self.__dict__)
+        state['_con'] = None
+        state['_lcon'] = None
+        return state
 
     def __init__(self, con):
         '''
@@ -148,62 +176,75 @@ class Pools(object):
         '''
         self._lcon.delete_pool([p.name for p in pools])
 
-    def get(self, name, reload=False):
+    def get(self, name, nocache=False, deep=False):
         '''
         Lookup pool by name.
 
         @param name: Pool name
         @return: Pool object
         '''
-        return self.get_multi([name], reload)
+        return self.get_multi([name,], nocache, deep)
 
-    def get_all(self, reload=False):
+    def get_all(self, nocache=False, deep=False):
         '''
         Get list of all pools.
 
         @return: List of Pool objects
         '''
-        return self.get_multi(self.names, reload)
+        return self.get_multi(self.names, nocache, deep)
 
-    def get_multi(self, names, reload=False):
+    def get_multi(self, names, nocache=False, deep=False):
         '''
         Get a set of pools
 
         @param names:
-        @keyword reload:
+        @keyword deep:
+        @keyword nocache:
         @return: List of Pool objects
         '''
         missing = list()
         pools = list()
 
-        if reload:
+        if nocache:
             missing = names
         else:
             for name in names:
                 try:
-                    pools.append(self.pools[name])
+                    pools.append(self._pools[name])
                 except KeyError:
                     missing.append(name)
-        
+
         if missing:
-            temp = self.load(missing)
+            temp = self.load(missing, deep)
             pools += temp
-            self._pools = dict(((p.name, p) for p in temp))
+            self._pools.update(dict(((p.name, p) for p in temp)))
 
         return pools
 
-    def load(self, names):
+    def load(self, names, deep=False):
         '''
         Read pool from bigip.
 
         @param names: Pool names
         @return: list of Pool object
         '''
-        pools = self._con.get_member_v2(names)
-        return [Pool(self._con, n, p) for n, p in izip(names, pools)]
+        print "calling get_member_v2(%s...[%d])" % (repr(names)[:70], len(repr(names)))
+        members = self._lcon.get_member_v2(names)
+        ret = list()
+
+        for name, members in izip(names, members):
+            pool = Pool(self._con, name)
+            pool._members = [Member(self._con, pool=pool, **m) for m in members]
+            ret.append(pool)
+
+        if deep:
+            self.load_all_member_ips(ret)
+            self.load_all_member_status(ret)
+
+        return ret
 
     @property
-    def names(self):
+    def names(self): 
         '''
         Lazy load names of pools on the bigip.
 
@@ -214,12 +255,79 @@ class Pools(object):
 
         return self._names
 
-    def all_ips(self):
+    def load_all_member_ips(self, pools):
+        '''
+        Load member ip information for all members of this pool in one
+        call to the LTM.
+        '''
+        load = list()
+        names = list()
+
+        for i, pool in enumerate(pools):
+            temp = list() 
+
+            for j, member in enumerate(pool.members):
+                if not member._ip:
+                    temp.append({'member': member.to_dict(),
+                                 'pindex': i,
+                                 'mindex': j})
+
+            if temp:
+                names.append(pool.name)
+                load.append(temp)
+
+        if not load:
+            return
+
+        addresses = [[x['member'] for x in y] for y in load]
+        print "calling get_member_address(%s...)" % repr(addresses)[:70]
+        ips = self._lcon.get_member_address(names, addresses)
+
+        for i, members in enumerate(ips):
+            for j, ip in enumerate(members):
+                member = load[i][j]
+                pools[member['pindex']].members[member['mindex']]._ip = ip
+
+    def load_all_member_status(self, pools=None):
+        '''
+        Load memer status information for all members of the pools specified in
+        `pools`
+        '''
+        load = list()
+        names = list()
+
+        if pools is None:
+            pools = self._pools.values()
+
+        for i, pool in enumerate(pools):
+            temp = list()
+
+            for j, member in enumerate(pool.members):
+                if not member._status:
+                    add = {'member': member.to_dict(),
+                                 'pindex': i,
+                                 'mindex': j}
+                    temp.append(add)
+
+            if temp:
+                names.append(pool.name)
+                load.append(temp)
+
+        members = [[x['member'] for x in y] for y in load]
+        statuses = self._lcon.get_member_object_status(names, members)
+
+        for i, members in enumerate(statuses):
+            for j, status in enumerate(members):
+                member = load[i][j]
+                pools[member['pindex']].members[member['mindex']]._status = status
+
+    def all_ips(self): 
         '''
         Get list of every ip assigned as a pool member.
 
         @return: list of ip addresses
         '''
+        self.load_all_member_ips()
         ip_gen = (x.ips() for x in self.pools.itervalues())
         return list(set(chain.from_iterable(ip_gen)))
 
@@ -229,7 +337,14 @@ class Pool(object):
     Pool representation
     '''
     _members = None
+    _vips = None
     _status = None
+
+    def __getstate__(self):
+        state = copy(self.__dict__)
+        state['_con'] = None
+        state['_lcon'] = None
+        return state
 
     def __init__(self, con, name, members=None, method=None):
         '''
@@ -305,15 +420,16 @@ class Pool(object):
 
         @return list of ip addresses
         '''
-        return [member.address for member in self.members]
+        return [member.ip for member in self.members]
 
-    def status(self, reload=False):
+    def status(self, nocache=False):
         '''
         Get pool status
 
         @return:
         '''
-        if reload or not self._status:
+        if nocache or not self._status:
+            print "calling get_object_status(%r)" % self.name
             self._status = self._lcon.get_object_status([self.name])[0]
 
         return self._status
@@ -334,7 +450,7 @@ class Pool(object):
         '''
         return self.status()['availability_status'] == 'AVAILABILITY_STATUS_GREEN'
 
-    def load_all_member_status(self, reload=False):
+    def load_all_member_status(self, nocache=False):
         '''
         Load member status information for all members of this pool in one
         call to the LTM.
@@ -342,7 +458,7 @@ class Pool(object):
         load = list()
 
         for i, member in enumerate(self.members):
-            if reload or not member._status:
+            if nocache or not member._status:
                 load.append({'member': member.to_dict(),
                              'index': i})
 
@@ -352,24 +468,24 @@ class Pool(object):
         for i, status in enumerate(stats[0]):
             self.members[load[i]['index']]._status = status
 
-    def load_all_member_ips(self, reload=False):
+    def load_all_member_ips(self, nocache=False):
         '''
         Load member ip information for all members of this pool in one
         call to the LTM.
         '''
-        load = list()
+        self.pool.load_all_member_ips([self.name,], nocache)
 
-        for i, member in enumerate(self.members):
-            if reload or not member._ip:
-                load.append({'member': member.to_dict(),
-                             'index': i})
+    @property
+    def virtual_servers(self):
+        if self._vips is None:
+            self._vips = list()
+            all_vips = VirtualServers(self._con).get_all()
+            for vip in all_vips:
+                if vip.pool.name == self.name:
+                    self._vips.append(vip)
 
-        ips = self._lcon.get_member_address([self.name,],
-            [[x['member'] for x in load]])
+        return self._vips
 
-        for i, ip in enumerate(ips[0]):
-            self.members[load[i]['index']]._ip = ip
-    
 
 class Member(object):
     '''
@@ -377,6 +493,12 @@ class Member(object):
     '''
     _status = None
     _ip = None
+
+    def __getstate__(self):
+        state = copy(self.__dict__)
+        state['_con'] = None
+        state['_lcon'] = None
+        return state
 
     def __init__(self, con, address, port, pool=None):
         ''' '''
@@ -401,10 +523,10 @@ class Member(object):
         return self._lcon.get_member_metadata([self.pool.name],
                                               [[self.to_dict()]])[0][0]
 
-    def status(self, reload=False):
+    def status(self, nocache=False):
         '''
         '''
-        if not self._status or reload:
+        if not self._status or nocache:
             self._status = self._lcon.get_member_object_status(
                     [self.pool.name], [[self.to_dict()]])[0][0]
 
@@ -417,7 +539,6 @@ class Member(object):
         if not self._ip:
             self._ip = self._lcon.get_member_address(
                     [self.pool.name], [[self.to_dict()]])[0][0]
-
         return self._ip
 
     @property
@@ -459,11 +580,20 @@ class Nodes(object):
     '''
     _names = None
 
+    def __getstate__(self):
+        state = copy(self.__dict__)
+        state['_con'] = None
+        state['_lcon'] = None
+        return state
+
     def __init__(self, con):
         ''' '''
         self._con = con
-        self._lcon = self._con.LocalLB.NodeAddressV2
         self._nodes = dict()
+
+    @property
+    def _lcon(self):
+        return self._con.LocalLB.NodeAddressV2
 
     @property
     def names(self):
@@ -473,20 +603,20 @@ class Nodes(object):
 
         return self._names
 
-    def get(self, name, reload=False):
+    def get(self, name, nocache=False):
         ''' '''
-        return self.get_multi([name,], reload)
+        return self.get_multi([name,], nocache)
 
-    def get_all(self, reload=False):
+    def get_all(self, nocache=False):
         ''' '''
-        return self.get_multi(self.names, reload)
+        return self.get_multi(self.names, nocache)
 
-    def get_multi(self, names, reload=False):
+    def get_multi(self, names, nocache=False):
         ''' '''
         missing = list()
         nodes = list()
 
-        if reload:
+        if nocache:
             missing = names
         else:
             for name in names:
@@ -512,9 +642,29 @@ class Nodes(object):
 class Node(object):
     '''
     '''
+    _pools = None
+
+    def __getstate__(self):
+        state = copy(self.__dict__)
+        state['_con'] = None
+        state['_lcon'] = None
+        return state
+
     def __init__(self, con, name, address):
         '''
         '''
         self._con = con
         self.name = name
         self.address = address
+
+    @property
+    def pools(self):
+        if self._pools is None:
+            self._pools = list()
+            all_pools = Pools(self._con).get_all(deep=True)
+
+            for pool in all_pools:
+                if self.address in pool.ips():
+                    self._pools.append(pool)
+
+        return self._pools

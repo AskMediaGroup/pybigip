@@ -3,6 +3,29 @@ Generic utilities.
 '''
 
 
+class memoize(object):
+    '''
+    Cache instances of a class.
+    '''
+
+    def __init__(self, cls):
+        ''' '''
+        self.cls = cls
+        self.__dict__.update(cls.__dict__)
+        self.cls.instances = dict()
+
+    def __call__(self, *args, **kwargs):
+        ''' '''
+        args_str = [str(s) for s in args]
+        kwargs_str = ['%s:%s' % (k, v) for k, v in sorted(kwargs.items(), key=lambda x: x[0])]
+        key = '::'.join(args_str + kwargs_str)
+
+        if key not in self.cls.instances:
+            self.cls.instances[key] = self.cls(*args, **kwargs)
+
+        return self.cls.instances[key]
+
+
 class ObjectList(object):
     '''
     @var klass: Class to instatiate when acessing bigip objecs in this list.
